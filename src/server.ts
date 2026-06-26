@@ -160,6 +160,27 @@ app.all(NGINX_PATH + "/**", async (req: Request, res: Response, next) => {
   return handleProxyRequest(req, res, next);
 });
 
+// HIGH-1: catch-all error handler, registered last. Handles errors passed
+// via next(err) (e.g. from the response stream's "error" event after
+// headers may already be partially sent) so they never reach Express's
+// default error handler, which would otherwise leak stack traces.
+app.use(
+  (err: unknown, req: Request, res: Response, next: NextFunction): void => {
+    if (res.headersSent) {
+      // Response already started streaming to the client; nothing more we
+      // can safely send. Just log and close out.
+      console.error("Error after headers sent", err);
+      res.end();
+      return;
+    }
+    if (axios.isAxiosError(err)) {
+      handleAxiosError(res, err);
+    } else {
+      handleUnexpectedError(res, err);
+    }
+  }
+);
+
 function remapUrl(
   url: string | null,
   redirectUrl: string,
@@ -561,17 +582,32 @@ export async function handleProxyRequest(
   }
 }
 
+// HIGH-1: never send the raw Error/AxiosError object back to the client -
+// it serializes to JSON including the stack trace, internal paths, and the
+// full Axios request config (headers, target URL, etc). Always respond with
+// a generic body and a status mapped from the error type.
+function axiosErrorStatus(error: AxiosError<any, any>): number {
+  switch (error.code) {
+    case "ENOTFOUND":
+    case "ECONNREFUSED":
+    case "EHOSTUNREACH":
+    case "ENETUNREACH":
+      return 502; // Bad Gateway
+    case "ECONNABORTED":
+    case "ETIMEDOUT":
+      return 504; // Gateway Timeout
+    default:
+      return 502; // Bad Gateway
+  }
+}
+
 function handleAxiosError(
   res: Response,
   error: AxiosError<any, any>,
   logId: string = ""
 ) {
   console.error(logId + "Received Error", convertForLog(error));
-  if (error.response) {
-    res.status(error.response.status).send(error);
-  } else {
-    res.status(500).send(error);
-  }
+  res.status(axiosErrorStatus(error)).json({ error: "Proxy error" });
 }
 
 function handleUnexpectedError(
@@ -580,7 +616,7 @@ function handleUnexpectedError(
   logId: string = ""
 ) {
   console.error(logId + "Received Unknown Error", error);
-  res.status(500).send(error);
+  res.status(500).json({ error: "Proxy error" });
 }
 
 function convertForLog(
