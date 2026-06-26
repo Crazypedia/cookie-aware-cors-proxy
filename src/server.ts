@@ -366,6 +366,18 @@ export async function handleProxyRequest(
 
     // Find the url of the server to call
     if (path.startsWith("/")) path = path.substring(1);
+
+    // nginx's merge_slashes (on by default, and only settable at the
+    // http/server level - an app's location-only template can't override
+    // it) collapses the "//" in path-style proxy targets before the
+    // request reaches us, e.g. "https://example.com/" arrives here as
+    // "https:/example.com/". This only affects the path portion of the
+    // URI, not the query string, so ?url= targets are unaffected. Restore
+    // the double slash so the scheme check below still recognizes it.
+    if (!pathFromUrl) {
+      path = path.replace(/^([a-zA-Z][a-zA-Z0-9+.-]*):\/(?!\/)/, "$1://");
+    }
+
     if (path == "") {
       res.sendFile("./pages/index.html", { root: __dirname });
       return;
