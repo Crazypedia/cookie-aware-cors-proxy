@@ -108,16 +108,19 @@ describe("SSRF private-range flag [CRIT-2]", () => {
       isolatedServer = require("../src/server");
     });
 
-    process.env.SSRF_ALLOW_PRIVATE = previousAllowPrivate;
-    process.env.CACP_PORT = previousPort;
-
     try {
+      // isPrivateRangeAllowed() reads process.env.SSRF_ALLOW_PRIVATE
+      // dynamically on every request, not just at require time - so the env
+      // var must stay deleted until the request below has actually been
+      // made, not just while the module is being required.
       const response = await request(isolatedServer.app).get("/proxy/").query({
         url: "http://10.0.0.1/",
       });
       expect(response.status).toBe(403);
     } finally {
       isolatedServer.getProxyServer().close();
+      process.env.SSRF_ALLOW_PRIVATE = previousAllowPrivate;
+      process.env.CACP_PORT = previousPort;
     }
   });
 
@@ -132,9 +135,6 @@ describe("SSRF private-range flag [CRIT-2]", () => {
     jest.isolateModules(() => {
       isolatedServer = require("../src/server");
     });
-
-    process.env.SSRF_ALLOW_PRIVATE = previousAllowPrivate;
-    process.env.CACP_PORT = previousPort;
 
     try {
       // The dummy backend (tests/globalSetup.js) binds to a real, non-loopback
@@ -155,6 +155,8 @@ describe("SSRF private-range flag [CRIT-2]", () => {
       expect(loopbackResponse.status).toBe(403);
     } finally {
       isolatedServer.getProxyServer().close();
+      process.env.SSRF_ALLOW_PRIVATE = previousAllowPrivate;
+      process.env.CACP_PORT = previousPort;
     }
   });
 });
