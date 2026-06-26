@@ -9,6 +9,8 @@ import { Stream } from "stream";
 import { chromeEngine } from "./chrome-engine/chromeEngine";
 import { argv } from "process";
 import * as http from "http";
+import * as dns from "dns";
+import ipaddr from "ipaddr.js";
 import { transformCookie } from "./chrome-engine/fillCookiesJar";
 
 const PORT = process.env.CACP_PORT || 3000;
@@ -32,6 +34,55 @@ function isOriginAllowed(origin: string | undefined): boolean {
   // pages, and must never be allowlisted regardless of CORS_ALLOWED_ORIGINS.
   if (origin == null || origin.toLowerCase() === "null") return false;
   return CORS_ALLOWED_ORIGINS.includes(origin.toLowerCase());
+}
+
+// CRIT-2: SSRF target blocklist. Loopback/link-local/unspecified are always
+// blocked; RFC 1918 private ranges can be allowed for local dev only.
+// Read dynamically (not cached) so it can be toggled at runtime/in tests.
+function isPrivateRangeAllowed(): boolean {
+  return process.env.SSRF_ALLOW_PRIVATE === "true";
+}
+
+const SSRF_ALWAYS_BLOCKED_RANGES = new Set(["loopback", "linkLocal", "unspecified"]);
+const SSRF_PRIVATE_RANGES = new Set(["private", "uniqueLocal", "carrierGradeNat"]);
+
+function isIpBlocked(ip: string): boolean {
+  if (!ipaddr.isValid(ip)) return false;
+  const range = ipaddr.process(ip).range();
+  if (SSRF_ALWAYS_BLOCKED_RANGES.has(range)) return true;
+  if (!isPrivateRangeAllowed() && SSRF_PRIVATE_RANGES.has(range)) return true;
+  return false;
+}
+
+// Checks the scheme, hostname/IP literal, and (stretch goal) the resolved IP
+// of the target before Axios is allowed to connect to it.
+async function isTargetUrlAllowed(targetUrl: URL): Promise<boolean> {
+  const scheme = targetUrl.protocol.toLowerCase();
+  if (scheme !== "http:" && scheme !== "https:") return false;
+
+  let hostname = targetUrl.hostname.toLowerCase();
+  if (hostname === "localhost") return false;
+
+  // URL keeps brackets around IPv6 literals (e.g. "[::1]"); ipaddr.js wants
+  // them stripped.
+  if (hostname.startsWith("[") && hostname.endsWith("]")) {
+    hostname = hostname.slice(1, -1);
+  }
+
+  if (ipaddr.isValid(hostname)) {
+    return !isIpBlocked(hostname);
+  }
+
+  // Not a literal IP: resolve it so a hostname that maps to a blocked range
+  // (DNS rebinding) is also rejected, not just IP literals.
+  try {
+    const lookupResult = await dns.promises.lookup(hostname);
+    if (isIpBlocked(lookupResult.address)) return false;
+  } catch {
+    // DNS resolution failure is not an SSRF concern; let Axios attempt the
+    // request and fail naturally (handled by the error sanitization layer).
+  }
+  return true;
 }
 
 export const app = express();
@@ -238,7 +289,10 @@ export async function handleProxyRequest(
     if (path == "") {
       res.sendFile("./pages/index.html", { root: __dirname });
       return;
-    } else if (!path.startsWith("http")) {
+    } else if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(path)) {
+      // Any absolute URL (including disallowed schemes like file:// or
+      // gopher://) falls through to the SSRF check below, which rejects
+      // them with 403. Only truly relative/non-URL paths are 404'd here.
       console.warn("Ignoring relative url path " + path);
       if (debugMode)
         console.debug(
@@ -258,7 +312,18 @@ export async function handleProxyRequest(
         path.substring(protocolIndex + 1);
     }
 
-    const targetUrl = new URL(path);
+    let targetUrl: URL;
+    try {
+      targetUrl = new URL(path);
+    } catch {
+      res.status(400).json({ error: "Invalid target URL" });
+      return;
+    }
+
+    if (!(await isTargetUrlAllowed(targetUrl))) {
+      res.status(403).json({ error: "Target URL not allowed" });
+      return;
+    }
 
     config.url = path;
     config.method = req.method;

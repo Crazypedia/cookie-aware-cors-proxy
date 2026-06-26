@@ -26,6 +26,7 @@ node run start
 | Variable | Default | Description |
 |---|---|---|
 | `CORS_ALLOWED_ORIGINS` | *(empty — no origins allowed)* | Comma-separated list of exact-match origins (e.g. `https://app.example.com,https://example.com`) allowed to receive `Access-Control-Allow-Origin`/`Access-Control-Allow-Credentials`. Unset or empty means every cross-origin request is denied (fail closed). `Origin: null` is never matched. |
+| `SSRF_ALLOW_PRIVATE` | `false` | Allow `?url=` targets in RFC 1918 private ranges (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`) — for local development only. Loopback, link-local/cloud-metadata (`169.254.0.0/16`), the `localhost` hostname, and non-`http(s)` schemes are always blocked regardless of this flag. |
 
 ## API
 

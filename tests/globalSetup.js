@@ -1,4 +1,30 @@
 const express = require('express');
+const os = require('os');
+
+// The proxy now enforces the CRIT-2 SSRF blocklist, which always rejects
+// loopback targets. The dummy backend used by the test suite therefore can't
+// bind to 127.0.0.1 anymore - it needs to listen on a real network interface
+// address instead so requests to it pass the SSRF check like a normal target
+// would. That address is typically RFC 1918 private in CI/sandbox
+// environments, so SSRF_ALLOW_PRIVATE is enabled for the test run (dev/test
+// only - loopback and link-local stay blocked regardless of this flag).
+process.env.SSRF_ALLOW_PRIVATE = 'true';
+
+function findNonLoopbackAddress() {
+    const interfaces = os.networkInterfaces();
+    for (const name of Object.keys(interfaces)) {
+        for (const iface of interfaces[name]) {
+            if (iface.family === 'IPv4' && !iface.internal) {
+                return iface.address;
+            }
+        }
+    }
+    console.warn('No non-loopback IPv4 interface found; falling back to 127.0.0.1 (SSRF tests against the dummy backend will fail).');
+    return '127.0.0.1';
+}
+
+const bindAddress = findNonLoopbackAddress();
+
     // Starts the proxy server
 const testedServer = require('../src/server');
 
@@ -10,7 +36,7 @@ module.exports = async () => {
     const app = express();
 
     await new Promise(function(resolve) {
-        server = app.listen(0,'127.0.0.1',function() {
+        server = app.listen(0,bindAddress,function() {
             console.log('Running express on ',server.address());
             resolve();
         });
