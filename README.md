@@ -21,6 +21,12 @@ npm install cookie-aware-cors-proxy
 node run start
 ```
 
+## Configuration
+
+| Variable | Default | Description |
+|---|---|---|
+| `CORS_ALLOWED_ORIGINS` | *(empty — no origins allowed)* | Comma-separated list of exact-match origins (e.g. `https://app.example.com,https://example.com`) allowed to receive `Access-Control-Allow-Origin`/`Access-Control-Allow-Credentials`. Unset or empty means every cross-origin request is denied (fail closed). `Origin: null` is never matched. |
+
 ## API
 
 TODO (same api as request package)
