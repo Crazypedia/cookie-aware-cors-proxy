@@ -20,6 +20,20 @@ const NGINX_PATH = process.env.CACP_NGINX_PATH || "/proxy";
 const BYPASS_CHROME_SANDBOX = process.env.CACP_BYPASS_SANDBOX == "TRUE";
 const CHROME_EXEC = process.env.CACP_CHROME_EXEC;
 
+// CRIT-1: explicit allowlist, no reflected-origin/credentials-true combo.
+// Empty/unset env var means no origins are allowed (fail closed).
+const CORS_ALLOWED_ORIGINS = (process.env.CORS_ALLOWED_ORIGINS || "")
+  .split(",")
+  .map((origin) => origin.trim().toLowerCase())
+  .filter((origin) => origin.length > 0);
+
+function isOriginAllowed(origin: string | undefined): boolean {
+  // "null" is the literal Origin header value sent by sandboxed iframes/file://
+  // pages, and must never be allowlisted regardless of CORS_ALLOWED_ORIGINS.
+  if (origin == null || origin.toLowerCase() === "null") return false;
+  return CORS_ALLOWED_ORIGINS.includes(origin.toLowerCase());
+}
+
 export const app = express();
 app.use(express.json()); // for parsing application/json
 app.use(express.urlencoded({ extended: true })); // for parsing application/x-www-form-urlencoded
@@ -147,14 +161,19 @@ export async function handleProxyRequest(
 
   //console.log(req.path);
   try {
-    // Set CORS headers: allow all origins, methods, and headers: you may want to lock this down in a production environment
-    res.header("Access-Control-Allow-Origin", req.header("origin"));
+    // Set CORS headers: only reflect the origin if it's on the allowlist
+    // (CORS_ALLOWED_ORIGINS); otherwise omit Access-Control-Allow-Origin
+    // entirely and let the browser enforce same-origin policy.
+    const requestOrigin = req.header("origin");
+    if (isOriginAllowed(requestOrigin)) {
+      res.header("Access-Control-Allow-Origin", requestOrigin);
+      res.header("Access-Control-Allow-Credentials", "true");
+    }
     res.header("Access-Control-Allow-Methods", "GET, PUT, PATCH, POST, DELETE");
-    res.header(
-      "Access-Control-Allow-Headers",
-      req.header("access-control-request-headers")
-    );
-    res.header("Access-Control-Allow-Credentials", "true");
+    const requestedHeaders = req.header("access-control-request-headers");
+    if (requestedHeaders != null) {
+      res.header("Access-Control-Allow-Headers", requestedHeaders);
+    }
 
     let path = req.originalUrl;
 
