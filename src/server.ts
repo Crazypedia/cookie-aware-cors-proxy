@@ -36,6 +36,35 @@ function isOriginAllowed(origin: string | undefined): boolean {
   return CORS_ALLOWED_ORIGINS.includes(origin.toLowerCase());
 }
 
+// HIGH-2: only forward a known-safe set of upstream response headers to the
+// browser client. Everything else (including upstream access-control-* and
+// security headers, which the proxy/nginx set themselves) is silently
+// dropped rather than passed through unfiltered.
+const UPSTREAM_HEADER_PASSTHROUGH = new Set([
+  "content-type",
+  "content-length",
+  "content-encoding",
+  "cache-control",
+  "last-modified",
+  "etag",
+  "expires",
+  "set-cookie",
+  "location",
+  "www-authenticate",
+  "retry-after",
+  "x-ratelimit-limit",
+  "x-ratelimit-remaining",
+  "x-ratelimit-reset",
+  ...(process.env.UPSTREAM_HEADER_PASSTHROUGH_EXTRA || "")
+    .split(",")
+    .map((header) => header.trim().toLowerCase())
+    .filter((header) => header.length > 0),
+]);
+
+function isUpstreamHeaderAllowed(headerKey: string): boolean {
+  return UPSTREAM_HEADER_PASSTHROUGH.has(headerKey.toLowerCase());
+}
+
 // CRIT-2: SSRF target blocklist. Loopback/link-local/unspecified are always
 // blocked; RFC 1918 private ranges can be allowed for local dev only.
 // Read dynamically (not cached) so it can be toggled at runtime/in tests.
@@ -509,6 +538,7 @@ export async function handleProxyRequest(
       console.log(logId + "Received response: ", convertForLog(response));
     if (logMode) console.log(logId + "Received response: ", responseStatus);
     for (const headerKey in response.headers) {
+      if (!isUpstreamHeaderAllowed(headerKey)) continue;
       if (headerKey.toLowerCase() == "set-cookie") {
         // We have special handling for cookies
         const newCookies = new Array<string>();

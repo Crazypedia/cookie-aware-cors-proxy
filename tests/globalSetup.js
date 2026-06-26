@@ -53,6 +53,10 @@ module.exports = async () => {
         if( path.startsWith('/redirect')) {
             res.redirect(process.env.SERVER_ADDRESS+path.substring('/redirect'.length));
             return;
+        }else if( path.startsWith('/headertest')) {
+            res.set('X-Internal-Secret', 'super-secret-value');
+            res.set('Content-Type', 'text/html');
+            path=path.substring('/headertest'.length);
         }else if( path.startsWith('/cookie')) {
             res.cookie("domain-cookie", "value-of-domain-cookie",{
                 domain:req.hostname,
