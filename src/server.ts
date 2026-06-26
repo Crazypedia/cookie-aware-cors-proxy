@@ -317,28 +317,18 @@ export async function handleProxyRequest(
     }
 
     let path = req.originalUrl;
-
-    // Dynamically enable / disable log (=just url of calls are logged) or debug mode (full log)
-    debugMode = DEBUG_MODE;
     if (path.startsWith(NGINX_PATH)) path = path.substring(NGINX_PATH.length);
-    // Support for debug mode just by appending /debug in the proxy url
-    if (path.startsWith("/debug")) {
-      path = path.substring("/debug".length);
-      redirectUrl = redirectUrl + "debug/";
-      debugMode = true;
-    } else if (req.header("CACP_DEBUG") == "TRUE") {
-      debugMode = true;
-    }
 
-    // Support for log mode just by appending /debug in the proxy url
+    // HIGH-3: debug/log mode is operator-controlled only (CACP_DEBUG /
+    // CACP_LOG env vars, set at deploy time). A caller could previously flip
+    // either on for their own request via a "/debug" or "/log" path prefix or
+    // a CACP_DEBUG/CACP_LOG request header - and since debugMode logs the
+    // full forwarded request config (including Authorization/Key/x-apikey
+    // headers) to the server's own logs, that let any caller force another
+    // in-flight request's credentials into plaintext logs. Removed; toggle
+    // via the env vars and restart the service instead.
+    debugMode = DEBUG_MODE;
     logMode = LOG_MODE;
-    if (path.startsWith("/log")) {
-      path = path.substring("/log".length);
-      redirectUrl = redirectUrl + "log/";
-      logMode = true;
-    } else if (req.header("CACP_LOG") == "TRUE") {
-      logMode = true;
-    }
 
     // Immediatly return yes on cors requests
     if (req.method.toLowerCase() == "options") {
