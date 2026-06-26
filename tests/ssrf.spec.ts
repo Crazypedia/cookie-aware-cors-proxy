@@ -1,17 +1,8 @@
 import axios from "axios";
+import request from "supertest";
 
 describe("SSRF target blocklist [CRIT-2]", () => {
   const TEST_SERVER_URL = "http://localhost:3000/proxy";
-
-  const originalAllowPrivate = process.env.SSRF_ALLOW_PRIVATE;
-
-  afterEach(() => {
-    if (originalAllowPrivate === undefined) {
-      delete process.env.SSRF_ALLOW_PRIVATE;
-    } else {
-      process.env.SSRF_ALLOW_PRIVATE = originalAllowPrivate;
-    }
-  });
 
   it("blocks loopback IPv4 (127.0.0.1)", async () => {
     const response = await axios.request({
@@ -64,17 +55,6 @@ describe("SSRF target blocklist [CRIT-2]", () => {
     expect(response.status).toBe(403);
   });
 
-  it("blocks RFC 1918 private targets by default (10.0.0.1)", async () => {
-    delete process.env.SSRF_ALLOW_PRIVATE;
-    const response = await axios.request({
-      url: TEST_SERVER_URL + "/",
-      params: { url: "http://10.0.0.1/" },
-      method: "get",
-      validateStatus: () => true,
-    });
-    expect(response.status).toBe(403);
-  });
-
   it("blocks file:// scheme", async () => {
     const response = await axios.request({
       url: TEST_SERVER_URL + "/",
@@ -103,33 +83,78 @@ describe("SSRF target blocklist [CRIT-2]", () => {
     expect(ftpResponse.status).toBe(403);
   });
 
-  it("allows RFC 1918 private targets when SSRF_ALLOW_PRIVATE=true, but still blocks loopback", async () => {
-    process.env.SSRF_ALLOW_PRIVATE = "true";
+});
 
-    // Private range should no longer be rejected by the SSRF check itself.
-    // There's no real host at 10.0.0.1 in this sandbox, so the connection
-    // attempt itself may fail or time out - what matters is that it's not
-    // rejected with the SSRF 403 before Axios even tries.
-    try {
-      const privateResponse = await axios.request({
-        url: TEST_SERVER_URL + "/",
-        params: { url: "http://10.0.0.1/" },
-        method: "get",
-        validateStatus: () => true,
-        timeout: 3000,
-      });
-      expect(privateResponse.status).not.toBe(403);
-    } catch (err: any) {
-      expect(err.response?.status).not.toBe(403);
-    }
+// tests/globalSetup.js starts one shared proxy server (used by all the specs
+// above) with SSRF_ALLOW_PRIVATE permanently set to "true", so its dummy
+// backend - which has to bind to a real, often RFC 1918, interface address -
+// passes the SSRF check. That means the shared server's SSRF_ALLOW_PRIVATE
+// behavior can't be toggled per-test by mutating process.env from here: this
+// test file and the shared server run in different processes once Jest forks
+// test files into workers, so such a mutation is invisible to the server
+// that actually receives the request. Each test below instead loads its own
+// isolated copy of src/server.ts (same pattern as corsAllowlist.spec.ts) with
+// the env var set the way that specific test needs.
+describe("SSRF private-range flag [CRIT-2]", () => {
+  it("blocks RFC 1918 private targets by default (10.0.0.1)", async () => {
+    const previousAllowPrivate = process.env.SSRF_ALLOW_PRIVATE;
+    const previousPort = process.env.CACP_PORT;
+    delete process.env.SSRF_ALLOW_PRIVATE;
+    process.env.CACP_PORT = "0";
 
-    // Loopback/link-local must always be blocked regardless of the flag.
-    const loopbackResponse = await axios.request({
-      url: TEST_SERVER_URL + "/",
-      params: { url: "http://127.0.0.1/" },
-      method: "get",
-      validateStatus: () => true,
+    let isolatedServer!: typeof import("../src/server");
+    jest.resetModules();
+    jest.isolateModules(() => {
+      isolatedServer = require("../src/server");
     });
-    expect(loopbackResponse.status).toBe(403);
+
+    process.env.SSRF_ALLOW_PRIVATE = previousAllowPrivate;
+    process.env.CACP_PORT = previousPort;
+
+    try {
+      const response = await request(isolatedServer.app).get("/proxy/").query({
+        url: "http://10.0.0.1/",
+      });
+      expect(response.status).toBe(403);
+    } finally {
+      isolatedServer.getProxyServer().close();
+    }
+  });
+
+  it("allows RFC 1918 private targets when SSRF_ALLOW_PRIVATE=true, but still blocks loopback", async () => {
+    const previousAllowPrivate = process.env.SSRF_ALLOW_PRIVATE;
+    const previousPort = process.env.CACP_PORT;
+    process.env.SSRF_ALLOW_PRIVATE = "true";
+    process.env.CACP_PORT = "0";
+
+    let isolatedServer!: typeof import("../src/server");
+    jest.resetModules();
+    jest.isolateModules(() => {
+      isolatedServer = require("../src/server");
+    });
+
+    process.env.SSRF_ALLOW_PRIVATE = previousAllowPrivate;
+    process.env.CACP_PORT = previousPort;
+
+    try {
+      // The dummy backend (tests/globalSetup.js) binds to a real, non-loopback
+      // interface address, which is typically RFC 1918 private in CI/sandbox
+      // environments. Routing the proxy at it - rather than an unreachable
+      // address like 10.0.0.1, whose connection behavior varies by network
+      // environment - deterministically exercises "private range allowed"
+      // without depending on how a given host treats a dead connection.
+      const privateResponse = await request(isolatedServer.app)
+        .get("/proxy/")
+        .query({ url: process.env.SERVER_ADDRESS + "/index.html" });
+      expect(privateResponse.status).toBe(200);
+
+      // Loopback/link-local must always be blocked regardless of the flag.
+      const loopbackResponse = await request(isolatedServer.app)
+        .get("/proxy/")
+        .query({ url: "http://127.0.0.1/" });
+      expect(loopbackResponse.status).toBe(403);
+    } finally {
+      isolatedServer.getProxyServer().close();
+    }
   });
 });
