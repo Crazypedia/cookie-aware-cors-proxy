@@ -66,6 +66,16 @@ function isUpstreamHeaderAllowed(headerKey: string): boolean {
   return UPSTREAM_HEADER_PASSTHROUGH.has(headerKey.toLowerCase());
 }
 
+// Forwarding a header in the response is not enough for browser JS to read
+// it cross-origin - only a small CORS-safelisted set (content-type,
+// content-length, etc.) is readable by default. Anything else (e.g.
+// X-RateLimit-*) needs to be explicitly exposed. set-cookie is excluded:
+// browsers never expose it via this header regardless, it's handled through
+// the document cookie jar instead.
+const EXPOSED_RESPONSE_HEADERS = Array.from(UPSTREAM_HEADER_PASSTHROUGH).filter(
+  (header) => header !== "set-cookie"
+);
+
 // CRIT-2: SSRF target blocklist. Loopback/link-local/unspecified are always
 // blocked; RFC 1918 private ranges can be allowed for local dev only.
 // Read dynamically (not cached) so it can be toggled at runtime/in tests.
@@ -295,6 +305,10 @@ export async function handleProxyRequest(
     if (isOriginAllowed(requestOrigin)) {
       res.header("Access-Control-Allow-Origin", requestOrigin);
       res.header("Access-Control-Allow-Credentials", "true");
+      res.header(
+        "Access-Control-Expose-Headers",
+        EXPOSED_RESPONSE_HEADERS.join(", ")
+      );
     }
     res.header("Access-Control-Allow-Methods", "GET, PUT, PATCH, POST, DELETE");
     const requestedHeaders = req.header("access-control-request-headers");

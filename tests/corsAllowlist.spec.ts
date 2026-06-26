@@ -46,4 +46,15 @@ describe("CORS allowlist reflects a configured origin [CRIT-1]", () => {
     expect(response.status).toBe(200);
     expect(response.headers["access-control-allow-origin"]).toBeUndefined();
   });
+
+  it("exposes the forwarded headers Vantage needs (e.g. rate-limit quota) but never set-cookie [HIGH-2]", async () => {
+    const response = await request(isolatedServer.app)
+      .get("/proxy/" + process.env.SERVER_ADDRESS + "/index.html")
+      .set("Origin", "https://allowed.example.com");
+
+    const exposed = response.headers["access-control-expose-headers"];
+    expect(exposed).toBeDefined();
+    expect(exposed).toMatch(/x-ratelimit-remaining/i);
+    expect(exposed).not.toMatch(/set-cookie/i);
+  });
 });
