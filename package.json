@@ -17,6 +17,7 @@
   "dependencies": {
     "axios": "^1.7.7",
     "express": "^4.19.2",
+    "express-rate-limit": "^8.5.2",
     "hcaptcha-solver": "^1.0.2",
     "ipaddr.js": "^2.4.0",
     "puppeteer": "^23.3.0",
@@ -28,6 +29,7 @@
   "bundleDependencies": [
     "axios",
     "express",
+    "express-rate-limit",
     "hcaptcha-solver",
     "ipaddr.js",
     "puppeteer",

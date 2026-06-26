@@ -1,4 +1,5 @@
 import express, { NextFunction, Request, Response } from "express";
+import rateLimit from "express-rate-limit";
 import axios, {
   AxiosError,
   AxiosRequestConfig,
@@ -115,8 +116,33 @@ async function isTargetUrlAllowed(targetUrl: URL): Promise<boolean> {
 }
 
 export const app = express();
+
+// MED-1: trust only the immediate reverse proxy hop (nginx/Cloudflare sit in
+// front in the deployed YunoHost setup) so X-Forwarded-For is used for rate
+// limiting without letting a client spoof its own IP via that header.
+app.set("trust proxy", 1);
+
 app.use(express.json()); // for parsing application/json
 app.use(express.urlencoded({ extended: true })); // for parsing application/x-www-form-urlencoded
+
+// MED-1: basic per-IP rate limiting on the proxy routes.
+const RATE_LIMIT_WINDOW_MS = parseInt(
+  process.env.RATE_LIMIT_WINDOW_MS || "60000",
+  10
+);
+const RATE_LIMIT_MAX = parseInt(process.env.RATE_LIMIT_MAX || "60", 10);
+
+const proxyRateLimiter = rateLimit({
+  windowMs: RATE_LIMIT_WINDOW_MS,
+  limit: RATE_LIMIT_MAX,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (req: Request, res: Response): void => {
+    res.status(429).json({ error: "Too many requests" });
+  },
+});
+
+app.use(NGINX_PATH, proxyRateLimiter);
 
 export function extractDomain(url: string): string {
   let domain = url.substring(
