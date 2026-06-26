@@ -23,18 +23,18 @@ jobs:
   build:
 
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           ref: 'main'
-          token: ${{secrets.GCOLLIN_ACTIONS_TOKEN}}
       - name: Use Node.js 20
         uses: actions/setup-node@v4
         with:
           node-version: '18.x'
-          registry-url: 'https://registry.npmjs.org'
           cache: 'npm'
       - name: Version
         if: ${{ success() && ( inputs.version == '') }}
@@ -67,18 +67,6 @@ jobs:
       - name: Unit tests
         run: |
           npm run test
-      - name: Publish to Npm
-        if: ${{ success() && ( inputs.next == true)}}
-        run: |
-          npm publish ./dist --access public --tag next
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-      - name: Publish to Npm
-        if: ${{ success() && ( inputs.next == false) }}
-        run: |
-          npm publish ./dist --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       - name: Release library
         run: |
           npm run pack
